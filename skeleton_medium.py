@@ -64,20 +64,7 @@ import math
 
 @dataclass
 class GPT2Config:
-    """Hyperparameters for the model.
-
-    Fields you need (with the lab-sized defaults you should use):
-        vocab_size:  int = 50257     # GPT-2 byte-level BPE
-        d_model:     int = 384
-        n_heads:     int = 6
-        n_layers:    int = 6
-        d_ff:        int = 1536      # 4 * d_model
-        max_seq_len: int = 256
-        dropout:     float = 0.1
-        pad_idx:     int = 0
-
-    Plus a `d_k` property: d_model // n_heads (assert divisible).
-    """
+    """Hyperparameters for the model."""
     # TODO Step 1: declare the dataclass fields above and add a d_k property.
     pass
 
