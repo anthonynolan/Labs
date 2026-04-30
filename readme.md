@@ -2,6 +2,17 @@
 
 You're going to implement GPT-2 from scratch in [tinygrad](https://github.com/tinygrad/tinygrad). The skeleton you edit has the scaffolding — config dataclass, weight initialisation, training loop, optimiser, dataset loader, causal mask, scheduler — and the model itself is missing: token + positional embeddings, attention, FFN, the decoder block, and the forward pass. By the end of the session you'll have a working transformer that you can train on TinyShakespeare and use to generate Shakespeare-flavoured text.
 
+## Before the session — read this on your laptop
+
+Clone this repo on your laptop first so you can read the README and skim the skeleton ahead of time:
+
+```bash
+git clone https://github.com/The-Fitzwilliam-AI-Circle/Labs.git
+cd Labs/gpt2-tinygrad
+```
+
+You don't need to install anything locally. The actual work happens on a RunPod GPU; your laptop just needs a browser (and optionally an SSH client if you want to use your own editor — see below). You can open `skeleton_easy.py` in your editor of choice to get a feel for what you'll be implementing.
+
 ## Pick your difficulty
 
 There are three skeleton files. Pick one and edit it. They all expose the same public API to `train.py`, so the runnable command is the same regardless of difficulty.
@@ -25,34 +36,157 @@ Default is easy. Run with `--difficulty medium` or `--difficulty hard` (see Setu
 
 `main.py` (the full reference implementation) is **not in the repo by design.** If you go looking for it, you won't find it — that's intentional. Neil may share it after the session.
 
-## Setup
+## Setup — RunPod (the venue path)
 
-Two paths depending on where you are.
+This is what you do at the venue. About 10 minutes start to finish, then you're training on a 4090.
 
-### At the venue (RunPod)
+### 1. Accept the team invite
 
-The pod template already has CUDA, Python, and the heavy deps. You just need:
+At the start of the session you'll receive an email from RunPod inviting you to the **Fitzwilliam AI Circle** team account. Click the link, follow the prompts to create or sign in to a RunPod account, and accept the invite.
+
+The team account is how we pay for everyone's compute centrally — you don't need to add a credit card or buy credit yourself.
+
+We will get everyone set up on this at the start of the lab. 
+
+### 2. Switch to the team account
+
+After logging in to RunPod, look at the **top-left dropdown** in the dashboard. By default you're in your personal account. Click the dropdown and switch to **Fitzwilliam AI Circle**.
+
+If you don't switch, you'll be looking at your personal (possibly unfunded) account and won't see the lab template.
+
+### 3. Deploy a pod from the lab template
+
+- Go to **Pods** → **Deploy**.
+- Under **Pod Template**, pick **`Fitzwilliam-GPT-lab`**. This template has CUDA, Python 3.11, the right environment variables, and a 20 GB persistent volume mounted at `/workspace` already configured.
+- **GPU:** pick **RTX 4090** in **Secure Cloud**. RTX 3090 also works if 4090s are out. Don't pick A100/H100 — they're overkill for this lab and burn through team credit faster.
+- Leave everything else at the template's defaults.
+- Click **Deploy**. Wait ~60 seconds for the pod to boot.
+
+### 4. Connect to the pod
+
+Once the pod's status shows **Running**, click **Connect** on the pod's row. You have three connection options. Pick whichever fits your workflow — they're not mutually exclusive, you can use more than one against the same pod.
+
+#### Option A — Jupyter Lab (recommended for first-timers)
+
+Click the **Jupyter Lab** link (port 8888) to open it in a new browser tab. You get a file browser, a terminal, and notebook editor in one UI, no setup on your laptop required.
+
+Open a terminal inside Jupyter Lab via **File → New → Terminal**. That's where you run the commands in step 5.
+
+To edit code, double-click `skeleton_easy.py` in the file browser sidebar — it opens in a tab. Save with `Cmd/Ctrl-S`. You can have the editor open in one tab and the terminal in another and flip between them.
+
+This is the path of least resistance and what the rest of the README assumes by default.
+
+#### Option B — Full SSH (if you use VS Code, Cursor, JetBrains, emacs etc )
+
+Best if you'd rather use your own editor against the remote pod — VS Code Remote-SSH, Cursor, JetBrains Gateway, or just `ssh` + your usual terminal setup. Setup is a bit more involved but you do it once and reuse it for every pod afterwards.
+
+**One-time setup (on your laptop):**
+
+If you don't already have an SSH key, generate one:
 
 ```bash
-git clone <repo-url> gpt2-lab && cd gpt2-lab
+ssh-keygen -t ed25519 -C "your@email.com"
+# Press enter to accept the default location (~/.ssh/id_ed25519)
+# Optionally set a passphrase
+```
+
+Then copy the public key to your clipboard:
+
+```bash
+# macOS
+pbcopy < ~/.ssh/id_ed25519.pub
+
+# Linux
+xclip -sel clip < ~/.ssh/id_ed25519.pub
+
+# Or just print it and copy manually
+cat ~/.ssh/id_ed25519.pub
+```
+
+In RunPod, go to **Settings → SSH Public Keys**, paste the public key, save. This is per-user — you only need to do it once.
+
+**Per-pod (every time you deploy):**
+
+After the pod is running, click **Connect** on the pod and find the **SSH over exposed TCP** section (not "Basic SSH Terminal" — that's the limited version, see Option C). It'll show a command like:
+
+```bash
+ssh root@123.45.67.89 -p 12345 -i ~/.ssh/id_ed25519
+```
+
+Copy and run that in your terminal. You're now in the pod's shell. Continue with step 5.
+
+**Using VS Code or Cursor:** install the **Remote - SSH** extension, then **Cmd/Ctrl-Shift-P → Remote-SSH: Connect to Host → Add New SSH Host**, paste the same command. After it connects, **File → Open Folder → /workspace/Labs/gpt2-tinygrad**. You're now editing files on the pod with full editor features.
+
+**Using JetBrains Gateway:** new SSH connection, point at the same host/port/key, pick the project directory after connecting.
+
+#### Option C — Web Terminal (basic shell, no extras)
+
+The simplest option. Click **Start Web Terminal** and then **Connect to Web Terminal** to open a bare shell in your browser. No file browser, no editor — you'd edit files via `nano` or `vim` from the shell. Mostly useful for quick poking around or as a fallback if Jupyter Lab is misbehaving.
+
+This is sometimes labelled just "SSH" in the RunPod UI, but it's not a real SSH connection — it doesn't support SCP, SFTP, or external editor integrations. For those, use Option B.
+
+### 5. Set up the lab on the pod
+
+Whichever connection option you picked, you should now have a shell on the pod. Run:
+
+```bash
+# uv isn't preinstalled, so install it first.
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+
+# Clone into the persistent volume so your work survives pod stops.
+cd /workspace
+git clone https://github.com/The-Fitzwilliam-AI-Circle/Labs.git
+cd Labs
 uv sync
-uv run python train.py                        # default: easy
-# or
+```
+
+Verify the GPU is visible to tinygrad before you start implementing:
+
+```bash
+uv run python -c "from tinygrad import Tensor; print(Tensor.ones(10).realize().device)"
+# Should print: CUDA
+```
+
+If it prints `CLANG` or `CPU`, the template's `CUDA=1` env var isn't being respected. Run `unset CLANG` and try again, then ping Neil if it still doesn't work.
+
+### 6. Edit and run
+
+Edit `skeleton_easy.py` using whichever method matches your connection choice — Jupyter Lab's file browser, your local VS Code/Cursor over SSH, or terminal-based editors like vim/nano. The file lives at `/workspace/Labs/gpt2-tinygrad/skeleton_easy.py`.
+
+To run training (in any pod terminal):
+
+```bash
+uv run python train.py                      # default: easy
 uv run python train.py --difficulty medium
 uv run python train.py --difficulty hard
 ```
 
-That last command will fail until you've implemented enough of your chosen skeleton to make a forward pass go through. That's expected.
+That command will fail until you've implemented enough of your chosen skeleton to make a forward pass go through. That's expected — see the roadmap below.
 
-### On your own laptop (the fallback path)
+### 7. When you're done — STOP THE POD
 
-If you want to keep tinkering after the session, or you're prepping ahead of time. You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+This is the only step that costs you (well, Neil) money to forget. The team's RunPod credit is shared, so a forgotten running pod burns credit that other people would have used.
+
+On the **Pods** page, click **Stop** on your pod. **Stop ≠ Terminate:**
+
+- **Stop** pauses billing for compute and keeps your `/workspace` volume around (~$0.10/GB/hr storage rate, trivial). You can resume later and pick up where you left off.
+- **Terminate** wipes the pod *and* the volume. Only do this if you've pushed your work to GitHub.
+
+For a single-session lab, **stop** when you finish. If you're not coming back, **terminate** after pushing.
+
+**Note on SSH and stopped pods:** when you stop and resume a pod, RunPod gives it a new SSH host/port. Your public key persists in your RunPod account, but you'll need to copy the new SSH command from the **Connect** panel after each restart. VS Code Remote-SSH users will need to update the host entry in `~/.ssh/config` (or just delete and re-add the host).
+
+## Setup — your own laptop (the fallback path)
+
+If you want to keep tinkering after the session, or you're prepping ahead of time and don't have a RunPod pod yet. You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 # Install uv if you don't have it
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-git clone <repo-url> gpt2-lab && cd gpt2-lab
+# You should already have cloned the repo from the "Before the session" step.
+cd Labs
 uv sync
 uv run python train.py
 ```
@@ -151,12 +285,17 @@ If you finish early, in rough order of usefulness:
 
 ## Stuck?
 
-Three or four things that catch people most often:
+Things that catch people most often:
 
-- **`tinygrad.codegen` errors mentioning shader buffers on macOS.** You're on Metal. The platform guard at the top of the skeleton should be activating the CPU backend — make sure you haven't deleted or moved the `if platform.system() == "Darwin": os.environ["DEV"] = "CLANG"` block, and that it sits *before* the tinygrad import.
-- **Loss is NaN.** Lower the learning rate (try 1e-4 instead of 2.5e-4) and/or add gradient clipping. Often happens if the softmax sees `-inf` everywhere because the mask was built wrong.
-- **GPU isn't being used (on RunPod).** Check `Tensor.ones(10).realize().device` — should print `CUDA`. If it says `CLANG` or `CPU`, either the platform guard isn't behaving as expected (`platform.system()` returning something unexpected) or someone explicitly exported `CLANG=1` in the shell. Unset it: `unset CLANG`.
+- **Pod template doesn't appear in the dropdown.** You're in your personal account, not the team account. Top-left dropdown → switch to Fitzwilliam AI Circle.
+- **GPU isn't being used (on RunPod).** Check `Tensor.ones(10).realize().device` — should print `CUDA`. If it says `CLANG` or `CPU`, run `unset CLANG` in the same shell session and retry. The template sets `CUDA=1`, so this only happens if you've shadowed it somehow.
+- **`tinygrad.codegen` errors mentioning shader buffers on macOS** (laptop path only). You're on Metal. The platform guard at the top of the skeleton should be activating the CPU backend — make sure you haven't deleted or moved the `if platform.system() == "Darwin": os.environ["DEV"] = "CLANG"` block, and that it sits *before* the tinygrad import.
 - **First forward pass hangs for ~30s.** That's the JIT kernel compile, not a bug. See the warning above the roadmap. Wait it out.
+- **Loss is NaN.** Lower the learning rate (try 1e-4 instead of 2.5e-4) and/or add gradient clipping. Often happens if the softmax sees `-inf` everywhere because the mask was built wrong.
 - **Loss starts at ~10.8 and stays there.** Your model is producing uniform-random logits. Most common cause: forward pass not actually wired through (e.g. embedding output not flowing into blocks, or `ln_f` skipped, or unembedding weight not tied correctly).
+- **Pod won't deploy / "no GPUs available".** RTX 4090s in Secure Cloud occasionally fill up. Either pick a different region from the dropdown, switch to Community Cloud (slightly less reliable but cheaper), or fall back to RTX 3090 / RTX A5000.
+- **My laptop went to sleep mid-training run.** Training is happening on the pod, not your laptop, so the run keeps going. Reopen Jupyter Lab — you may need to reconnect to the kernel from the Kernel menu — and the run is still there.
+- **`ssh: Permission denied (publickey)`.** Your public key isn't on your RunPod account, or you're trying to use the wrong private key. Check **Settings → SSH Public Keys** in RunPod, then run with the `-i` flag matching the key you uploaded: `ssh ... -i ~/.ssh/id_ed25519`.
+- **VS Code Remote-SSH connection fails after a pod restart.** RunPod gives the pod a new host/port on each restart. Either delete the old host entry from `~/.ssh/config` and re-add it from the new Connect panel, or update it in place.
 
 If none of those, ask Neil.
