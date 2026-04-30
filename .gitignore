@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Editor / tool config (personal, not shared with the lab repo)
+.vscode/
+.claude/
+
+# Reference implementation -- kept locally, not shipped with the lab repo.
+main.py
