@@ -15,3 +15,6 @@ wheels/
 
 # Reference implementation -- kept locally, not shipped with the lab repo.
 main.py
+
+.DS_Store
+**/.DS_Store
