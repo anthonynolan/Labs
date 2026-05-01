@@ -145,9 +145,14 @@ def scaled_dot_product_attention(
     Returns:
         (B, h, T_q, d_v)
     """
+    scores = q @ k.transpose(-2,-1)/np.sqrt(cfg.d_model)
+    attn_wei = scores.softmax(axis=-1)
+    attn_wei = attn_wei.dropout(dropout)
+    return attn_wei @ v
+
     # scores = q @ k^T / sqrt(d_k); add mask if given; softmax over the last
     # axis; dropout the attention weights; then weight v by them.
-    raise NotImplementedError("Step 2: implement scaled dot-product attention")
+    # raise NotImplementedError("Step 2: implement scaled dot-product attention")
 
 
 class MultiHeadAttention:
