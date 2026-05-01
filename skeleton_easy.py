@@ -61,14 +61,15 @@ import math
 
 @dataclass
 class GPT2Config:
-    vocab_size: int = 50257                # GPT-2 byte-level BPE
-    d_model: int = 384
-    n_heads: int = 6
-    n_layers: int = 6
-    d_ff: int = 1536                       # 4 * d_model
-    max_seq_len: int = 256
+    vocab_size: int = 5              # GPT-2 byte-level BPE
+    d_model: int = 8
+    n_heads: int = 2
+    n_layers: int = 1
+    d_ff: int = 4                      # 4 * d_model
+    max_seq_len: int = 4
     dropout: float = 0.1
     pad_idx: int = 0
+    batch_size: int = 2
 
     @property
     def d_k(self) -> int:
@@ -94,8 +95,10 @@ class TokenEmbedding:
 
     def __call__(self, x: Tensor) -> Tensor:
         # x: (B, T) int -> (B, T, d_model)
-        raise NotImplementedError("Step 1: implement token embedding lookup")
+        return self.embedding(x)
 
+    def __repr__(self):
+        return f'TokenEmbedding({self.embedding.vocab_sz}, {self.embedding.embed_sz})'
 
 class LearnedPositionalEmbedding:
     """Learned absolute position embeddings (the GPT-2 design).
@@ -115,7 +118,11 @@ class LearnedPositionalEmbedding:
         # x: (B, T, d_model) -> same shape
         # Build a (B, T) tensor of positions [0..T-1], embed it, add to x,
         # then apply dropout.
-        raise NotImplementedError("Step 1: implement positional embedding")
+        pos = Tensor.arange(0, x.shape[1], dtype=dtypes.int)
+        embedded_positions = self.embedding(pos) #(T, d_model)
+        return (x + embedded_positions).dropout(self.dropout)
+        
+        # raise NotImplementedError("Step 1: implement positional embedding")
 
 
 # ---------------------------------------------------------------------------
@@ -509,43 +516,54 @@ def greedy_generate(
 if __name__ == "__main__":
     cfg = GPT2Config(
         vocab_size=100,
-        d_model=64, n_heads=4, n_layers=2, d_ff=128,
-        max_seq_len=32, dropout=0.0,
+        d_model=8, n_heads=1, n_layers=2, d_ff=6,
+        max_seq_len=4, dropout=0.0, batch_size=2
     )
 
+
+    dataset = ToyLMDataset(cfg.vocab_size, cfg.max_seq_len, n_batches=1, batch_size=cfg.batch_size)
+    for tokens_in, tokens_out, causal_mask in dataset:
+        t = TokenEmbedding(cfg.vocab_size, cfg.d_model)
+        # print(tokens_in.numpy(), tokens_out.shape)
+        # print(t(tokens_in).shape)
+        pos = LearnedPositionalEmbedding(cfg.max_seq_len, cfg.d_model, cfg.dropout)
+        print(pos(t(tokens_in)).shape)
+
+
+    
     # ------------------------------------------------------------------
     # 1. Forward pass -- check output shape
     # ------------------------------------------------------------------
-    print("=== 1. Forward pass shape check ===")
-    model = GPT2(cfg)
-    B, T = 2, 6
+    # print("=== 1. Forward pass shape check ===")
+    # model = GPT2(cfg)
+    # B, T = 2, 6
 
-    tokens = Tensor(np.random.randint(1, cfg.vocab_size, (B, T)), dtype=dtypes.int32)
-    causal_mask = make_causal_mask(T)
+    # tokens = Tensor(np.random.randint(1, cfg.vocab_size, (B, T)), dtype=dtypes.int32)
+    # causal_mask = make_causal_mask(T)
 
-    logits = model(tokens, causal_mask)
-    print(f"  logits.shape = {logits.shape}  (expected ({B}, {T}, {cfg.vocab_size}))")
-    assert logits.shape == (B, T, cfg.vocab_size), f"shape mismatch: {logits.shape}"
+    # logits = model(tokens, causal_mask)
+    # print(f"  logits.shape = {logits.shape}  (expected ({B}, {T}, {cfg.vocab_size}))")
+    # assert logits.shape == (B, T, cfg.vocab_size), f"shape mismatch: {logits.shape}"
 
-    n_params_total = len(get_parameters(model))
-    print(f"  total parameter tensors: {n_params_total}")
-    print("  (no separate out_proj.weight -- output projection is token_embed.weight^T)")
-    print("  PASSED\n")
+    # n_params_total = len(get_parameters(model))
+    # print(f"  total parameter tensors: {n_params_total}")
+    # print("  (no separate out_proj.weight -- output projection is token_embed.weight^T)")
+    # print("  PASSED\n")
 
-    # ------------------------------------------------------------------
-    # 2. Overfit on toy LM task -- loss should fall
-    # ------------------------------------------------------------------
-    print("=== 2. LM overfit (300 steps) ===")
-    dataset = ToyLMDataset(vocab_size=20, seq_len=8, n_batches=400, batch_size=32)
-    trained_model = train(cfg, dataset, n_steps=300)
-    print("  Training done\n")
+    # # ------------------------------------------------------------------
+    # # 2. Overfit on toy LM task -- loss should fall
+    # # ------------------------------------------------------------------
+    # print("=== 2. LM overfit (300 steps) ===")
+    # dataset = ToyLMDataset(vocab_size=20, seq_len=8, n_batches=400, batch_size=32)
+    # trained_model = train(cfg, dataset, n_steps=300)
+    # print("  Training done\n")
 
-    # ------------------------------------------------------------------
-    # 3. Greedy generate from a short prompt
-    # ------------------------------------------------------------------
-    print("=== 3. Greedy generation ===")
-    prompt_arr = np.array([[3, 5, 7]])
-    prompt = Tensor(prompt_arr, dtype=dtypes.int32)
-    generated = greedy_generate(trained_model, prompt, max_new_tokens=7)
-    print(f"  prompt:    {prompt_arr[0].tolist()}")
-    print(f"  generated: {generated.numpy()[0].tolist()}")
+    # # ------------------------------------------------------------------
+    # # 3. Greedy generate from a short prompt
+    # # ------------------------------------------------------------------
+    # print("=== 3. Greedy generation ===")
+    # prompt_arr = np.array([[3, 5, 7]])
+    # prompt = Tensor(prompt_arr, dtype=dtypes.int32)
+    # generated = greedy_generate(trained_model, prompt, max_new_tokens=7)
+    # print(f"  prompt:    {prompt_arr[0].tolist()}")
+    # print(f"  generated: {generated.numpy()[0].tolist()}")
