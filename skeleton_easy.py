@@ -39,7 +39,7 @@ import platform
 if platform.system() == "Darwin":
     os.environ["DEV"] = "CLANG"
 
-from tinygrad import Tensor, nn, dtypes
+from tinygrad import Tensor, nn, dtypes, Device
 from tinygrad.nn.optim import AdamW
 from tinygrad.nn.state import get_parameters
 import numpy as np
@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import Optional
 import math
 
+print(Device.default)
 
 # ---------------------------------------------------------------------------
 # Config -- lab-sized defaults (trains in ~10 min on a 4090)
@@ -61,20 +62,22 @@ import math
 
 @dataclass
 class GPT2Config:
-    vocab_size: int = 5              # GPT-2 byte-level BPE
-    d_model: int = 8
-    n_heads: int = 2
-    n_layers: int = 1
-    d_ff: int = 4                      # 4 * d_model
-    max_seq_len: int = 4
-    dropout: float = 0.1
-    pad_idx: int = 0
-    batch_size: int = 2
+    vocab_size: int
+    d_model: int
+    n_heads: int
+    n_layers: int 
+    d_ff: int                      # 4 * d_model
+    max_seq_len: int 
+    dropout: float 
+    pad_idx: int 
+    batch_size: int 
 
     @property
     def d_k(self) -> int:
-        assert self.d_model % self.n_heads == 0
+        assert d_model % n_heads == 0
         return self.d_model // self.n_heads
+    
+
 
 
 # ---------------------------------------------------------------------------
@@ -145,14 +148,14 @@ def scaled_dot_product_attention(
     Returns:
         (B, h, T_q, d_v)
     """
-    scores = q @ k.transpose(-2,-1)/np.sqrt(cfg.d_model)
+    scores = q @ k.transpose(-2,-1)/math.sqrt(q.shape[-1]) 
+
+    if mask is not None:
+        scores= scores + mask
+    
     attn_wei = scores.softmax(axis=-1)
     attn_wei = attn_wei.dropout(dropout)
     return attn_wei @ v
-
-    # scores = q @ k^T / sqrt(d_k); add mask if given; softmax over the last
-    # axis; dropout the attention weights; then weight v by them.
-    # raise NotImplementedError("Step 2: implement scaled dot-product attention")
 
 
 class MultiHeadAttention:
@@ -185,7 +188,21 @@ class MultiHeadAttention:
         # Project to Q, K, V; reshape to (B, n_heads, T, d_k); call
         # scaled_dot_product_attention; recombine heads back to (B, T, d_model);
         # project out with w_o.
-        raise NotImplementedError("Step 2: implement multi-head attention")
+
+        B, T, _ = x.shape
+
+        q = self.w_q(x).reshape(B, T, self.n_heads, self.d_k).transpose(1,2)
+
+        k = self.w_k(x).reshape(B, T, self.n_heads, self.d_k).transpose(1,2)
+        v = self.w_v(x).reshape(B, T, self.n_heads, self.d_k).transpose(1,2)
+
+        
+        out = scaled_dot_product_attention(q, k, v, mask, self.dropout)
+        
+        out = out.transpose(1, 2).reshape(B, T, self.d_model)
+
+        return self.w_o(out)
+
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +231,12 @@ class PositionwiseFeedForward:
 
     def __call__(self, x: Tensor) -> Tensor:
         # w_1 -> gelu -> dropout -> w_2.
-        raise NotImplementedError("Step 3: implement position-wise FFN")
-
+        x = self.w_1(x)
+        x = x.gelu()
+        x = x.dropout(self.dropout)
+        x = self.w_2(x)
+        return x
+    
 
 # ---------------------------------------------------------------------------
 # Decoder block
@@ -245,10 +266,14 @@ class DecoderBlock:
         self.dropout = cfg.dropout
 
     def __call__(self, x: Tensor, causal_mask: Tensor) -> Tensor:
+        x = x + self.self_attention(self.norm_1(x), causal_mask).dropout(self.dropout)
+        x = self.norm_2(x)
+        x = x + self.ffn(x).dropout(self.dropout)
         # Pre-norm attention residual, then pre-norm FFN residual.
         # Apply self.dropout to each sublayer output before adding.
-        raise NotImplementedError("Step 3: implement the pre-norm decoder block")
-
+        # raise NotImplementedError("Step 3: implement the pre-norm decoder block")
+        return x
+    
 
 # ---------------------------------------------------------------------------
 # Full model
@@ -288,12 +313,27 @@ class GPT2:
         causal_mask: broadcastable to (B, n_heads, T, T); typically (1, 1, T, T).
         return:      (B, T, vocab_size) float logits.
         """
+
+        B, T = tokens.shape
         # Embed tokens, add positions, run through self.blocks, apply ln_f,
         # project to vocab using the tied embedding weight.
-        raise NotImplementedError("Step 4: implement the forward pass")
+
+        x = self.pos_embed(self.token_embed(tokens))
+        # assert x.shape == [B, T, self.token_embed.embedding.embed_sz], x.shape
+        
+        for block in self.blocks:
+            x = block(x, causal_mask)
+        x = self.ln_f(x)
+        
+        return  x @ self.token_embed.embedding.weight.transpose()
+        
+        
+
+        # raise NotImplementedError("Step 4: implement the forward pass")
 
     def __call__(self, tokens: Tensor, causal_mask: Tensor) -> Tensor:
-        raise NotImplementedError("Step 4: delegate to self.forward")
+        # raise NotImplementedError("Step 4: delegate to self.forward")
+        return self.forward(tokens, causal_mask)
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +395,6 @@ def make_causal_mask(size: int) -> Tensor:
     mask = future.where(Tensor(-float("inf")), Tensor(0.0))
     return mask.reshape(1, 1, size, size)
 
-
 # ---------------------------------------------------------------------------
 # Loss
 # ---------------------------------------------------------------------------
@@ -374,7 +413,17 @@ def lm_loss(logits: Tensor, target: Tensor, pad_idx: int) -> Tensor:
     # log_softmax along the vocab axis, gather the target log-probs (one_hot
     # works fine here), mask out positions where target == pad_idx, return
     # the mean over the remaining positions.
-    raise NotImplementedError("Step 5: implement language-modelling cross-entropy")
+
+    B, T, V = logits.shape
+    one_hots = target.one_hot(int(V))
+
+    before_pad = logits.log_softmax(axis=-1)
+    target_log_probs = (before_pad * one_hots).sum(axis=-1)
+    non_pad = target !=pad_idx
+    nll = -target_log_probs
+    masked_nll = non_pad * nll
+    return masked_nll.sum()/non_pad.sum()
+    # raise NotImplementedError("Step 5: implement language-modelling cross-entropy")
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +498,7 @@ def train_step(model: GPT2, optimizer: AdamW, batch) -> float:
     tokens_in, tokens_out, causal_mask = batch
 
     logits = model(tokens_in, causal_mask)
+
     loss = lm_loss(logits, tokens_out, model.cfg.pad_idx)
 
     optimizer.zero_grad()
@@ -456,6 +506,7 @@ def train_step(model: GPT2, optimizer: AdamW, batch) -> float:
     optimizer.step()
 
     return loss.numpy().item()
+
 
 
 def train(cfg: GPT2Config, dataset, n_steps: int, max_lr: float = 2.5e-4) -> "GPT2":
@@ -505,12 +556,31 @@ def greedy_generate(
     Stretch goal: cache K, V from earlier steps so the per-step forward is
     O(T) rather than O(T^2).
     """
+
+    tokens = prompt
+    B, T_prompt = tokens.shape
+    
+    assert T_prompt +max_new_tokens < model.cfg.max_seq_len
+
+
+    
     # Loop max_new_tokens times. Each step:
     #   - rebuild causal_mask for the current length
     #   - forward pass to get logits (B, T, V)
     #   - take logits at the final position, argmax over vocab
     #   - concatenate the new token onto `tokens` along dim=1
-    raise NotImplementedError("Step 6: implement greedy autoregressive generation")
+    for _ in range(max_new_tokens):
+        causal_mask = make_causal_mask(tokens.shape[1])
+        logits = model(tokens, causal_mask=causal_mask)
+        # B, T, V, we only want the last time position for each example, so all batch, last seq and all vocab [:, -1, :]
+        next_token_logits = logits[:, -1, :]
+        next_token = next_token_logits.argmax(axis=-1)
+        # This gives us next_token_logits of (B, ) but we need that last dim, so reshape it in
+        next_token = next_token.reshape(-1,1) #Maybe B, 1 would be better here.
+        next_token = next_token.cast(dtypes.int32)
+
+        tokens = tokens.cat(next_token, dim=1)
+    return tokens
 
 
 # ---------------------------------------------------------------------------
@@ -521,54 +591,44 @@ def greedy_generate(
 if __name__ == "__main__":
     cfg = GPT2Config(
         vocab_size=100,
-        d_model=8, n_heads=1, n_layers=2, d_ff=6,
-        max_seq_len=4, dropout=0.0, batch_size=2
+        d_model=8, n_heads=4, n_layers=2, d_ff=6,
+        max_seq_len=10, dropout=0.0, batch_size=2, pad_idx=0
     )
 
-
-    dataset = ToyLMDataset(cfg.vocab_size, cfg.max_seq_len, n_batches=1, batch_size=cfg.batch_size)
-    for tokens_in, tokens_out, causal_mask in dataset:
-        t = TokenEmbedding(cfg.vocab_size, cfg.d_model)
-        # print(tokens_in.numpy(), tokens_out.shape)
-        # print(t(tokens_in).shape)
-        pos = LearnedPositionalEmbedding(cfg.max_seq_len, cfg.d_model, cfg.dropout)
-        print(pos(t(tokens_in)).shape)
-
-
     
-    # ------------------------------------------------------------------
-    # 1. Forward pass -- check output shape
-    # ------------------------------------------------------------------
-    # print("=== 1. Forward pass shape check ===")
-    # model = GPT2(cfg)
-    # B, T = 2, 6
+# ------------------------------------------------------------------
+# 1. Forward pass -- check output shape
+# ------------------------------------------------------------------
+print("=== 1. Forward pass shape check ===")
+model = GPT2(cfg)
+B, T = 2, 6
 
-    # tokens = Tensor(np.random.randint(1, cfg.vocab_size, (B, T)), dtype=dtypes.int32)
-    # causal_mask = make_causal_mask(T)
+tokens = Tensor(np.random.randint(1, cfg.vocab_size, (B, T)), dtype=dtypes.int32)
+causal_mask = make_causal_mask(T)
 
-    # logits = model(tokens, causal_mask)
-    # print(f"  logits.shape = {logits.shape}  (expected ({B}, {T}, {cfg.vocab_size}))")
-    # assert logits.shape == (B, T, cfg.vocab_size), f"shape mismatch: {logits.shape}"
+logits = model(tokens, causal_mask)
+print(f"  logits.shape = {logits.shape}  (expected ({B}, {T}, {cfg.vocab_size}))")
+assert logits.shape == (B, T, cfg.vocab_size), f"shape mismatch: {logits.shape}"
 
-    # n_params_total = len(get_parameters(model))
-    # print(f"  total parameter tensors: {n_params_total}")
-    # print("  (no separate out_proj.weight -- output projection is token_embed.weight^T)")
-    # print("  PASSED\n")
+n_params_total = len(get_parameters(model))
+print(f"  total parameter tensors: {n_params_total}")
+print("  (no separate out_proj.weight -- output projection is token_embed.weight^T)")
+print("  PASSED\n")
 
-    # # ------------------------------------------------------------------
-    # # 2. Overfit on toy LM task -- loss should fall
-    # # ------------------------------------------------------------------
-    # print("=== 2. LM overfit (300 steps) ===")
-    # dataset = ToyLMDataset(vocab_size=20, seq_len=8, n_batches=400, batch_size=32)
-    # trained_model = train(cfg, dataset, n_steps=300)
-    # print("  Training done\n")
+# ------------------------------------------------------------------
+# 2. Overfit on toy LM task -- loss should fall
+# ------------------------------------------------------------------
+print("=== 2. LM overfit (300 steps) ===")
+dataset = ToyLMDataset(vocab_size=20, seq_len=8, n_batches=400, batch_size=32)
+trained_model = train(cfg, dataset, n_steps=300)
+print("  Training done\n")
 
-    # # ------------------------------------------------------------------
-    # # 3. Greedy generate from a short prompt
-    # # ------------------------------------------------------------------
-    # print("=== 3. Greedy generation ===")
-    # prompt_arr = np.array([[3, 5, 7]])
-    # prompt = Tensor(prompt_arr, dtype=dtypes.int32)
-    # generated = greedy_generate(trained_model, prompt, max_new_tokens=7)
-    # print(f"  prompt:    {prompt_arr[0].tolist()}")
-    # print(f"  generated: {generated.numpy()[0].tolist()}")
+# ------------------------------------------------------------------
+# 3. Greedy generate from a short prompt
+# ------------------------------------------------------------------
+print("=== 3. Greedy generation ===")
+prompt_arr = np.array([[3, 5, 7]])
+prompt = Tensor(prompt_arr, dtype=dtypes.int32)
+generated = greedy_generate(trained_model, prompt, max_new_tokens=7)
+print(f"  prompt:    {prompt_arr[0].tolist()}")
+print(f"  generated: {generated.numpy()[0].tolist()}")
